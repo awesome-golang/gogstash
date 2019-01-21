@@ -6,6 +6,7 @@ import (
 
 	geoip2 "github.com/oschwald/geoip2-golang"
 	"github.com/tsaikd/gogstash/config"
+	"github.com/tsaikd/gogstash/config/goglog"
 	"github.com/tsaikd/gogstash/config/logevent"
 )
 
@@ -19,9 +20,11 @@ const ErrorTag = "gogstash_filter_geoip2_error"
 type FilterConfig struct {
 	config.FilterConfig
 
-	DBPath  string `json:"db_path"`  // geoip2 db file path, default: GeoLite2-City.mmdb
-	IPField string `json:"ip_field"` // IP field to get geoip info
-	Key     string `json:"key"`      // geoip destination field name, default: geoip
+	DBPath      string `json:"db_path"`      // geoip2 db file path, default: GeoLite2-City.mmdb
+	IPField     string `json:"ip_field"`     // IP field to get geoip info
+	Key         string `json:"key"`          // geoip destination field name, default: geoip
+	QuietFail   bool   `json:"quiet"`        // fail quietly
+	SkipPrivate bool   `json:"skip_private"` // skip private IP addresses
 
 	db *geoip2.Reader
 }
@@ -34,8 +37,10 @@ func DefaultFilterConfig() FilterConfig {
 				Type: ModuleName,
 			},
 		},
-		DBPath: "GeoLite2-City.mmdb",
-		Key:    "geoip",
+		DBPath:      "GeoLite2-City.mmdb",
+		Key:         "geoip",
+		QuietFail:   false, // backwards compatible
+		SkipPrivate: false,
 	}
 }
 
@@ -57,14 +62,17 @@ func InitHandler(ctx context.Context, raw *config.ConfigRaw) (config.TypeFilterC
 
 // Event the main filter event
 func (f *FilterConfig) Event(ctx context.Context, event logevent.LogEvent) logevent.LogEvent {
-	if event.Extra == nil {
-		event.Extra = map[string]interface{}{}
-	}
-
 	ipstr := event.GetString(f.IPField)
-	record, err := f.db.City(net.ParseIP(ipstr))
+	ip := net.ParseIP(ipstr)
+	if f.SkipPrivate && f.privateIP(ip) {
+		// Passthru
+		return event
+	}
+	record, err := f.db.City(ip)
 	if err != nil {
-		config.Logger.Error(err)
+		if f.QuietFail {
+			goglog.Logger.Error(err)
+		}
 		event.AddTag(ErrorTag)
 		return event
 	}
@@ -77,7 +85,7 @@ func (f *FilterConfig) Event(ctx context.Context, event logevent.LogEvent) logev
 		return event
 	}
 
-	event.Extra[f.Key] = map[string]interface{}{
+	event.SetValue(f.Key, map[string]interface{}{
 		"city": map[string]interface{}{
 			"name": record.City.Names["en"],
 		},
@@ -94,7 +102,14 @@ func (f *FilterConfig) Event(ctx context.Context, event logevent.LogEvent) logev
 		"location":  []float64{record.Location.Longitude, record.Location.Latitude},
 		"longitude": record.Location.Longitude,
 		"timezone":  record.Location.TimeZone,
-	}
+	})
 
 	return event
+}
+
+func (f *FilterConfig) privateIP(ip net.IP) bool {
+	_, private24BitBlock, _ := net.ParseCIDR("10.0.0.0/8")
+	_, private20BitBlock, _ := net.ParseCIDR("172.16.0.0/12")
+	_, private16BitBlock, _ := net.ParseCIDR("192.168.0.0/16")
+	return private24BitBlock.Contains(ip) || private20BitBlock.Contains(ip) || private16BitBlock.Contains(ip)
 }

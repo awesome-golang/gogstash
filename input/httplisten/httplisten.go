@@ -2,12 +2,13 @@ package inputhttplisten
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 
-	"github.com/Sirupsen/logrus"
+	codecjson "github.com/tsaikd/gogstash/codec/json"
 	"github.com/tsaikd/gogstash/config"
+	"github.com/tsaikd/gogstash/config/goglog"
 	"github.com/tsaikd/gogstash/config/logevent"
 )
 
@@ -15,7 +16,7 @@ import (
 const ModuleName = "httplisten"
 
 const invalidMethodError = "Method not allowed: '%v'"
-const invalidJSONError = "Invalid JSON received on HTTP listener. Decoder error: %+v"
+const invalidRequestError = "Invalid request received on HTTP listener. Decoder error: %+v"
 const invalidAccessToken = "Invalid access token. Access denied."
 
 // InputConfig holds the configuration json fields and internal objects
@@ -47,12 +48,18 @@ func InitHandler(ctx context.Context, raw *config.ConfigRaw) (config.TypeInputCo
 	if err != nil {
 		return nil, err
 	}
+
+	conf.Codec, err = config.GetCodecDefault(ctx, *raw, codecjson.ModuleName)
+	if err != nil {
+		return nil, err
+	}
+
 	return &conf, nil
 }
 
 // Start wraps the actual function starting the plugin
 func (i *InputConfig) Start(ctx context.Context, msgChan chan<- logevent.LogEvent) (err error) {
-	logger := config.Logger
+	logger := goglog.Logger
 	http.HandleFunc(i.Path, func(rw http.ResponseWriter, req *http.Request) {
 		// Only allow POST requests (for now).
 		if req.Method != http.MethodPost {
@@ -71,7 +78,7 @@ func (i *InputConfig) Start(ctx context.Context, msgChan chan<- logevent.LogEven
 				return
 			}
 		}
-		i.postHandler(logger, msgChan, rw, req)
+		i.postHandler(msgChan, rw, req)
 	})
 	go func() {
 		logger.Infof("accepting POST requests to %s%s", i.Address, i.Path)
@@ -83,21 +90,29 @@ func (i *InputConfig) Start(ctx context.Context, msgChan chan<- logevent.LogEven
 }
 
 // Handle HTTP POST requests
-func (i *InputConfig) postHandler(logger *logrus.Logger, msgChan chan<- logevent.LogEvent, rw http.ResponseWriter, req *http.Request) {
+func (i *InputConfig) postHandler(msgChan chan<- logevent.LogEvent, rw http.ResponseWriter, req *http.Request) {
+	logger := goglog.Logger
 	logger.Debugf("Received request")
 
-	var jsonMsg map[string]interface{}
-	dec := json.NewDecoder(req.Body)
-
-	// attempt to decode post body, if it fails, log it.
-	if err := dec.Decode(&jsonMsg); err != nil {
-		logger.Warnf(invalidJSONError, err)
-		logger.Debugf("Invalid JSON: '%s'", req.Body)
-		rw.WriteHeader(http.StatusBadRequest)
-		rw.Write([]byte(fmt.Sprintf(invalidJSONError, err)))
+	data, err := ioutil.ReadAll(req.Body)
+	if err != nil {
+		logger.Errorf("read request body error: %v", err)
 		return
 	}
 
-	// send the event as it came to us
-	msgChan <- logevent.LogEvent{Extra: jsonMsg}
+	ok, err := i.Codec.Decode(context.TODO(), data, nil, msgChan)
+	if err != nil {
+		logger.Errorf("decode request body error: %v", err)
+	}
+	if !ok {
+		// event not sent to msgChan
+		rw.WriteHeader(http.StatusInternalServerError)
+		if err != nil {
+			rw.Write([]byte(err.Error()))
+		}
+	} else if err != nil {
+		// event sent to msgChan
+		rw.WriteHeader(http.StatusBadRequest)
+		rw.Write([]byte(fmt.Sprintf(invalidRequestError, err)))
+	}
 }

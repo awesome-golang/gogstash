@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	jsoniter "github.com/json-iterator/go"
+
 	"github.com/tsaikd/KDGoLib/jsonex"
 )
 
@@ -16,6 +18,9 @@ type LogEvent struct {
 	Tags      []string               `json:"tags,omitempty"`
 	Extra     map[string]interface{} `json:"-"`
 }
+
+// TagsField is the event tags field name
+const TagsField = "tags"
 
 const timeFormat = `2006-01-02T15:04:05.999999999Z`
 
@@ -28,11 +33,39 @@ func appendIfMissing(slice []string, s string) []string {
 	return append(slice, s)
 }
 
+// AddTag add tags into event.Tags
 func (t *LogEvent) AddTag(tags ...string) {
 	for _, tag := range tags {
 		ftag := t.Format(tag)
 		t.Tags = appendIfMissing(t.Tags, ftag)
 	}
+}
+
+// ParseTags parse tags into event.Tags
+func (t *LogEvent) ParseTags(tags interface{}) bool {
+	switch v := tags.(type) {
+	case []interface{}:
+		ok := true
+		stringTags := make([]string, 0, len(v))
+	tagsLoop:
+		for _, t := range v {
+			switch tag := t.(type) {
+			case string:
+				stringTags = append(stringTags, tag)
+			default:
+				ok = false
+				break tagsLoop
+			}
+		}
+		if ok {
+			t.Tags = stringTags
+			return true
+		}
+	case []string:
+		t.Tags = v
+		return true
+	}
+	return false
 }
 
 func (t LogEvent) getJSONMap() map[string]interface{} {
@@ -42,18 +75,18 @@ func (t LogEvent) getJSONMap() map[string]interface{} {
 	if t.Message != "" {
 		event["message"] = t.Message
 	}
-	if len(t.Tags) > 0 {
-		event["tags"] = t.Tags
-	}
 	for key, value := range t.Extra {
 		event[key] = value
+	}
+	if len(t.Tags) > 0 {
+		event["tags"] = t.Tags
 	}
 	return event
 }
 
 func (t LogEvent) MarshalJSON() (data []byte, err error) {
 	event := t.getJSONMap()
-	return jsonex.Marshal(event)
+	return jsoniter.Marshal(event)
 }
 
 func (t LogEvent) MarshalIndent() (data []byte, err error) {
@@ -80,25 +113,67 @@ func (t LogEvent) GetString(field string) string {
 	case "message":
 		return t.Message
 	default:
-		return getStringFromObject(t.Extra, field)
-	}
-}
-
-func getStringFromObject(obj map[string]interface{}, field string) string {
-	fieldSplits := strings.Split(field, ".")
-	if len(fieldSplits) < 2 {
-		if value, ok := obj[field]; ok {
-			return fmt.Sprintf("%v", value)
+		v, ok := getValueFromObject(t.Extra, field)
+		if ok {
+			return fmt.Sprintf("%v", v)
 		}
 		return ""
 	}
+}
 
-	switch child := obj[fieldSplits[0]].(type) {
-	case map[string]interface{}:
-		return getStringFromObject(child, strings.Join(fieldSplits[1:], "."))
-	default:
-		return fmt.Sprintf("%v", child)
+func (t LogEvent) GetValue(field string) (interface{}, bool) {
+	return getValueFromObject(t.Extra, field)
+}
+
+func (t *LogEvent) SetValue(field string, v interface{}) bool {
+	if t.Extra == nil {
+		t.Extra = map[string]interface{}{}
 	}
+	return setValueToObject(t.Extra, field, v)
+}
+
+func getValueFromObject(obj map[string]interface{}, field string) (interface{}, bool) {
+	fieldSplits := strings.Split(field, ".")
+	for i, key := range fieldSplits {
+		if i >= len(fieldSplits)-1 {
+			v, ok := obj[key]
+			return v, ok
+		} else if node, ok := obj[key]; ok {
+			switch v := node.(type) {
+			case map[string]interface{}:
+				obj = v
+			default:
+				return nil, false
+			}
+		} else {
+			break
+		}
+	}
+	return nil, false
+}
+
+func setValueToObject(obj map[string]interface{}, field string, v interface{}) bool {
+	fieldSplits := strings.Split(field, ".")
+	for i, key := range fieldSplits {
+		if i >= len(fieldSplits)-1 {
+			obj[key] = v
+			return true
+		} else if node, ok := obj[key]; ok {
+			switch v := node.(type) {
+			case map[string]interface{}:
+				obj = v
+			case nil:
+				obj[key] = map[string]interface{}{}
+				obj = obj[key].(map[string]interface{})
+			default:
+				return false
+			}
+		} else {
+			obj[key] = map[string]interface{}{}
+			obj = obj[key].(map[string]interface{})
+		}
+	}
+	return false
 }
 
 var (

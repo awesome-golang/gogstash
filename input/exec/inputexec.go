@@ -3,13 +3,12 @@ package inputexec
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
 
-	"github.com/Sirupsen/logrus"
+	jsoniter "github.com/json-iterator/go"
 	"github.com/tsaikd/KDGoLib/errutil"
 	"github.com/tsaikd/gogstash/config"
 	"github.com/tsaikd/gogstash/config/logevent"
@@ -81,14 +80,14 @@ func (t *InputConfig) Start(ctx context.Context, msgChan chan<- logevent.LogEven
 		case <-ctx.Done():
 			return nil
 		case <-startChan:
-			t.exec(msgChan, config.Logger)
+			t.exec(msgChan)
 		case <-ticker.C:
-			t.exec(msgChan, config.Logger)
+			t.exec(msgChan)
 		}
 	}
 }
 
-func (t *InputConfig) exec(msgChan chan<- logevent.LogEvent, logger *logrus.Logger) {
+func (t *InputConfig) exec(msgChan chan<- logevent.LogEvent) {
 	errs := []error{}
 
 	message, err := t.doExecCommand()
@@ -101,7 +100,7 @@ func (t *InputConfig) exec(msgChan chan<- logevent.LogEvent, logger *logrus.Logg
 
 	switch t.MsgType {
 	case MsgTypeJson:
-		if err = json.Unmarshal([]byte(message), &extra); err != nil {
+		if err = jsoniter.Unmarshal([]byte(message), &extra); err != nil {
 			errs = append(errs, err)
 		} else {
 			message = ""

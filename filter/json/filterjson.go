@@ -2,10 +2,11 @@ package filterjson
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
+	jsoniter "github.com/json-iterator/go"
 	"github.com/tsaikd/gogstash/config"
+	"github.com/tsaikd/gogstash/config/goglog"
 	"github.com/tsaikd/gogstash/config/logevent"
 )
 
@@ -48,19 +49,18 @@ func InitHandler(ctx context.Context, raw *config.ConfigRaw) (config.TypeFilterC
 // Event the main filter event
 func (f *FilterConfig) Event(ctx context.Context, event logevent.LogEvent) logevent.LogEvent {
 	var parsedMessage map[string]interface{}
-	if err := json.Unmarshal([]byte(event.Message), &parsedMessage); err != nil {
+	if err := jsoniter.Unmarshal([]byte(event.Message), &parsedMessage); err != nil {
 		event.AddTag(ErrorTag)
-		config.Logger.Error(err)
+		goglog.Logger.Error(err)
 		return event
 	}
 
-	if event.Extra == nil {
-		event.Extra = make(map[string]interface{})
-	}
-
 	if f.Appendkey != "" {
-		event.Extra[f.Appendkey] = parsedMessage
+		event.SetValue(f.Appendkey, parsedMessage)
 	} else {
+		if event.Extra == nil {
+			event.Extra = make(map[string]interface{})
+		}
 		for key, value := range parsedMessage {
 			switch key {
 			case f.Msgfield:
@@ -69,6 +69,8 @@ func (f *FilterConfig) Event(ctx context.Context, event logevent.LogEvent) logev
 				if ts, err := time.Parse(f.Tsformat, value.(string)); err == nil {
 					event.Timestamp = ts
 				}
+			case logevent.TagsField:
+				event.ParseTags(value)
 			default:
 				event.Extra[key] = value
 			}

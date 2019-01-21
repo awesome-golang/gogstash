@@ -1,16 +1,17 @@
 package inputsocket
 
 import (
-	"bytes"
+	"bufio"
 	"context"
-	"encoding/json"
 	"io"
 	"net"
 	"os"
-	"time"
 
+	reuse "github.com/libp2p/go-reuseport"
 	"github.com/tsaikd/KDGoLib/errutil"
+	codecjson "github.com/tsaikd/gogstash/codec/json"
 	"github.com/tsaikd/gogstash/config"
+	"github.com/tsaikd/gogstash/config/goglog"
 	"github.com/tsaikd/gogstash/config/logevent"
 	"golang.org/x/sync/errgroup"
 )
@@ -18,11 +19,17 @@ import (
 // ModuleName is the name used in config file
 const ModuleName = "socket"
 
+// ErrorTag tag added to event when process module failed
+const ErrorTag = "gogstash_input_socket_error"
+
 // InputConfig holds the configuration json fields and internal objects
 type InputConfig struct {
 	config.InputConfig
-	Socket  string `json:"socket"`  // Type of socket, must be one of ["tcp", "unix", "unixpacket"].
-	Address string `json:"address"` // For TCP, address must have the form `host:port`. For Unix networks, the address must be a file system path.
+	Socket string `json:"socket"` // Type of socket, must be one of ["tcp", "udp", "unix", "unixpacket"].
+	// For TCP or UDP, address must have the form `host:port`.
+	// For Unix networks, the address must be a file system path.
+	Address   string `json:"address"`
+	ReusePort bool   `json:"reuseport"`
 }
 
 // DefaultInputConfig returns an InputConfig struct with default values
@@ -45,16 +52,22 @@ var (
 // InitHandler initialize the input plugin
 func InitHandler(ctx context.Context, raw *config.ConfigRaw) (config.TypeInputConfig, error) {
 	conf := DefaultInputConfig()
-	if err := config.ReflectConfig(raw, &conf); err != nil {
+	err := config.ReflectConfig(raw, &conf)
+	if err != nil {
 		return nil, err
 	}
+
+	conf.Codec, err = config.GetCodecDefault(ctx, *raw, codecjson.ModuleName)
+	if err != nil {
+		return nil, err
+	}
+
 	return &conf, nil
 }
 
 // Start wraps the actual function starting the plugin
 func (i *InputConfig) Start(ctx context.Context, msgChan chan<- logevent.LogEvent) error {
-	eg, ctx := errgroup.WithContext(ctx)
-	logger := config.Logger
+	logger := goglog.Logger
 	var l net.Listener
 
 	switch i.Socket {
@@ -82,14 +95,33 @@ func (i *InputConfig) Start(ctx context.Context, msgChan chan<- logevent.LogEven
 			return err
 		}
 		logger.Debugf("listen %q on %q", i.Socket, address.String())
-		l, err = net.ListenTCP(i.Socket, address)
+		if i.ReusePort {
+			l, err = reuse.Listen(i.Socket, address.String())
+		} else {
+			l, err = net.ListenTCP(i.Socket, address)
+		}
 		if err != nil {
 			return err
 		}
 		defer l.Close()
+	case "udp":
+		address, err := net.ResolveUDPAddr(i.Socket, i.Address)
+		logger.Debugf("listen %q on %q", i.Socket, address.String())
+		var conn net.PacketConn
+		if i.ReusePort {
+			conn, err = reuse.ListenPacket(i.Socket, i.Address)
+		} else {
+			conn, err = net.ListenPacket(i.Socket, i.Address)
+		}
+		if err != nil {
+			return err
+		}
+		return i.handleUDP(ctx, conn, msgChan)
 	default:
 		return ErrorUnknownSocketType1.New(nil, i.Socket)
 	}
+
+	eg, ctx := errgroup.WithContext(ctx)
 
 	eg.Go(func() error {
 		select {
@@ -106,7 +138,8 @@ func (i *InputConfig) Start(ctx context.Context, msgChan chan<- logevent.LogEven
 			}
 			func(conn net.Conn) {
 				eg.Go(func() error {
-					parse(ctx, conn, msgChan)
+					defer conn.Close()
+					i.parse(ctx, conn, msgChan)
 					return nil
 				})
 			}(conn)
@@ -116,14 +149,49 @@ func (i *InputConfig) Start(ctx context.Context, msgChan chan<- logevent.LogEven
 	return eg.Wait()
 }
 
-func parse(ctx context.Context, conn net.Conn, msgChan chan<- logevent.LogEvent) {
-	defer conn.Close()
+func (i *InputConfig) handleUDP(ctx context.Context, conn net.PacketConn, msgChan chan<- logevent.LogEvent) error {
+	eg, ctx := errgroup.WithContext(ctx)
+	b := make([]byte, 1500) // read buf
+	pr, pw := io.Pipe()
+	defer pw.Close()
 
-	// Duplicate buffer to be able to read it even after failed json decoding
-	var streamCopy bytes.Buffer
-	stream := io.TeeReader(conn, &streamCopy)
+	eg.Go(func() error {
+		select {
+		case <-ctx.Done():
+			pr.Close()
+			conn.Close()
+			return nil
+		}
+	})
 
-	dec := json.NewDecoder(stream)
+	eg.Go(func() error {
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			default:
+			}
+			n, _, err := conn.ReadFrom(b)
+			if err == io.EOF {
+				break
+			} else if err != nil {
+				return err
+			}
+			pw.Write(b[:n])
+		}
+		return nil
+	})
+
+	eg.Go(func() error {
+		i.parse(ctx, pr, msgChan)
+		return nil
+	})
+
+	return eg.Wait()
+}
+
+func (i *InputConfig) parse(ctx context.Context, r io.Reader, msgChan chan<- logevent.LogEvent) {
+	b := bufio.NewReader(r)
 	for {
 		select {
 		case <-ctx.Done():
@@ -131,25 +199,12 @@ func parse(ctx context.Context, conn net.Conn, msgChan chan<- logevent.LogEvent)
 		default:
 		}
 
-		// Assume first the message is JSON and try to decode it
-		var jsonMsg map[string]interface{}
-		if err := dec.Decode(&jsonMsg); err == io.EOF {
-			break
-		} else if err != nil {
-			// If decoding fail, split raw message by line
-			// and send a log event per line
-			for {
-				line, err := streamCopy.ReadString('\n')
-				msgChan <- logevent.LogEvent{
-					Timestamp: time.Now(),
-					Message:   line,
-				}
-				if err != nil {
-					break
-				}
-			}
-			break
+		line, err := b.ReadBytes('\n')
+		if err != nil {
+			// EOF
+			return
 		}
-		msgChan <- logevent.LogEvent{Extra: jsonMsg}
+
+		i.Codec.Decode(ctx, line, nil, msgChan)
 	}
 }

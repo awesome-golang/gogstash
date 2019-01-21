@@ -8,11 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Sirupsen/logrus"
 	"github.com/bitly/go-hostpool"
+	"github.com/sirupsen/logrus"
 	"github.com/streadway/amqp"
 	"github.com/tsaikd/KDGoLib/errutil"
 	"github.com/tsaikd/gogstash/config"
+	"github.com/tsaikd/gogstash/config/goglog"
 	"github.com/tsaikd/gogstash/config/logevent"
 )
 
@@ -128,7 +129,7 @@ func (o *OutputConfig) initAmqpClients() error {
 func (o *OutputConfig) Output(ctx context.Context, event logevent.LogEvent) (err error) {
 	raw, err := event.MarshalJSON()
 	if err != nil {
-		logrus.Errorf("event Marshal failed: %v", event)
+		goglog.Logger.Errorf("event Marshal failed: %v", event)
 		return
 	}
 

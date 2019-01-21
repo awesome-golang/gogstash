@@ -6,19 +6,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tsaikd/gogstash/config"
+	"github.com/tsaikd/gogstash/config/goglog"
 	"github.com/tsaikd/gogstash/config/logevent"
 )
 
-var (
-	logger = config.Logger
-)
-
 func init() {
-	logger.Level = logrus.DebugLevel
+	goglog.Logger.SetLevel(logrus.DebugLevel)
 	config.RegistFilterHandler(ModuleName, InitHandler)
 }
 
@@ -49,11 +46,12 @@ filter:
 		Extra: map[string]interface{}{
 			"host": "Hostname",
 		},
+		Tags: []string{"foo"},
 	}
 
 	conf.TestInputEvent(logevent.LogEvent{
 		Timestamp: time.Now(),
-		Message:   "{ \"message\": \"Test\", \"host\": \"Hostname\", \"time\":\"2016-12-04T09:09:41.193Z\" }",
+		Message:   "{ \"message\": \"Test\", \"host\": \"Hostname\", \"time\":\"2016-12-04T09:09:41.193Z\", \"tags\": [ \"foo\" ] }",
 	})
 
 	if event, err := conf.TestGetOutputEvent(300 * time.Millisecond); assert.NoError(err) {

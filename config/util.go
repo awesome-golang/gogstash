@@ -8,14 +8,16 @@ import (
 	"os/signal"
 	"reflect"
 	"regexp"
+	"strings"
 
+	"github.com/icza/dyno"
 	"github.com/tsaikd/KDGoLib/logutil"
 	"github.com/tsaikd/gogstash/config/logevent"
 )
 
 // ReflectConfig set conf from confraw
 func ReflectConfig(confraw *ConfigRaw, conf interface{}) (err error) {
-	data, err := json.Marshal(confraw)
+	data, err := json.Marshal(dyno.ConvertMapI2MapS(map[string]interface{}(*confraw)))
 	if err != nil {
 		return
 	}
@@ -28,6 +30,24 @@ func ReflectConfig(confraw *ConfigRaw, conf interface{}) (err error) {
 	formatReflect(rv)
 
 	return
+}
+
+// GetFromObject obtaining value from specified field recursively
+func GetFromObject(obj map[string]interface{}, field string) interface{} {
+	fieldSplits := strings.Split(field, ".")
+	if len(fieldSplits) < 2 {
+		if value, ok := obj[field]; ok {
+			return value
+		}
+		return nil
+	}
+
+	switch child := obj[fieldSplits[0]].(type) {
+	case map[string]interface{}:
+		return GetFromObject(child, strings.Join(fieldSplits[1:], "."))
+	default:
+		return nil
+	}
 }
 
 func formatReflect(rv reflect.Value) {

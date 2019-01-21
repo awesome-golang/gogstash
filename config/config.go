@@ -11,9 +11,10 @@ import (
 	"time"
 
 	"github.com/tsaikd/KDGoLib/errutil"
+	"github.com/tsaikd/gogstash/config/goglog"
 	"github.com/tsaikd/gogstash/config/logevent"
 	"golang.org/x/sync/errgroup"
-	"gopkg.in/yaml.v2"
+	yaml "gopkg.in/yaml.v2"
 )
 
 // errors
@@ -33,6 +34,9 @@ type Config struct {
 	// channel size: chInFilter, chFilterOut, chOutDebug
 	ChannelSize int `json:"chsize,omitempty" yaml:"chsize"`
 
+	// worker number, defaults to 1
+	Worker int `json:"worker,omitempty" yaml:"worker"`
+
 	// enable debug channel, used for testing
 	DebugChannel bool `json:"debugch,omitempty" yaml:"debugch"`
 
@@ -45,6 +49,7 @@ type Config struct {
 
 var defaultConfig = Config{
 	ChannelSize: 100,
+	Worker:      1,
 }
 
 // MsgChan message channel type
@@ -96,6 +101,10 @@ func initConfig(config *Config) {
 	if config.ChannelSize < 1 {
 		config.ChannelSize = defaultConfig.ChannelSize
 	}
+	if config.Worker < 1 {
+		config.Worker = defaultConfig.Worker
+	}
+
 	config.chInFilter = make(MsgChan, config.ChannelSize)
 	config.chFilterOut = make(MsgChan, config.ChannelSize)
 	if config.DebugChannel {
@@ -105,7 +114,7 @@ func initConfig(config *Config) {
 
 // Start config in goroutines
 func (t *Config) Start(ctx context.Context) (err error) {
-	ctx = contextWithOSSignal(ctx, Logger, os.Interrupt, os.Kill)
+	ctx = contextWithOSSignal(ctx, goglog.Logger, os.Interrupt, os.Kill)
 	t.eg, t.ctx = errgroup.WithContext(ctx)
 
 	if err = t.startInputs(); err != nil {

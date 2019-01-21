@@ -8,6 +8,7 @@ import (
 	"github.com/satyrius/gonx"
 	"github.com/tsaikd/KDGoLib/errutil"
 	"github.com/tsaikd/gogstash/config"
+	"github.com/tsaikd/gogstash/config/goglog"
 	"github.com/tsaikd/gogstash/config/logevent"
 )
 
@@ -30,6 +31,7 @@ type FilterConfig struct {
 	Source string `json:"source"` // source message field name
 
 	fields []string
+	parser *gonx.Parser
 }
 
 // DefaultFilterConfig returns an FilterConfig struct with default values
@@ -64,26 +66,25 @@ func InitHandler(ctx context.Context, raw *config.ConfigRaw) (config.TypeFilterC
 		conf.fields[i] = fieldInfo[1]
 	}
 
+	conf.parser = gonx.NewParser(conf.Format)
+
 	return &conf, nil
 }
 
 // Event the main filter event
 func (f *FilterConfig) Event(ctx context.Context, event logevent.LogEvent) logevent.LogEvent {
-	if event.Extra == nil {
-		event.Extra = map[string]interface{}{}
-	}
-
 	message := event.GetString(f.Source)
-	reader := gonx.NewReader(strings.NewReader(message), f.Format)
+	reader := gonx.NewParserReader(strings.NewReader(message), f.parser)
 	entry, err := reader.Read()
 	if err != nil {
 		event.AddTag(ErrorTag)
-		config.Logger.Errorf("%s: %q", err, message)
+		goglog.Logger.Errorf("%s: %q", err, message)
 		return event
 	}
 
 	for _, field := range f.fields {
-		event.Extra[field], _ = entry.Field(field)
+		s, _ := entry.Field(field)
+		event.SetValue(field, s)
 	}
 
 	return event

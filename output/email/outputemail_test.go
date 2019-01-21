@@ -6,19 +6,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tsaikd/gogstash/config"
+	"github.com/tsaikd/gogstash/config/goglog"
 	"github.com/tsaikd/gogstash/config/logevent"
 )
 
-var (
-	logger = config.Logger
-)
-
 func init() {
-	logger.Level = logrus.DebugLevel
+	goglog.Logger.SetLevel(logrus.DebugLevel)
 	config.RegistOutputHandler(ModuleName, InitHandler)
 }
 

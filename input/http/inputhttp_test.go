@@ -2,23 +2,39 @@ package inputhttp
 
 import (
 	"context"
+	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/Sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tsaikd/gogstash/config"
-)
-
-var (
-	logger = config.Logger
+	"github.com/tsaikd/gogstash/config/goglog"
 )
 
 func init() {
-	logger.Level = logrus.DebugLevel
+	goglog.Logger.SetLevel(logrus.DebugLevel)
 	config.RegistInputHandler(ModuleName, InitHandler)
+	config.RegistCodecHandler(config.DefaultCodecName, config.DefaultCodecInitHandler)
+}
+
+func TestMain(m *testing.M) {
+	http.HandleFunc("/", func(rw http.ResponseWriter, req *http.Request) {
+		rw.Write([]byte("foo"))
+	})
+
+	go func() {
+		if err := http.ListenAndServe("127.0.0.1:8090", nil); err != nil {
+			goglog.Logger.Fatal(err)
+		}
+	}()
+
+	ret := m.Run()
+
+	os.Exit(ret)
 }
 
 func Test_input_http_module(t *testing.T) {
@@ -33,14 +49,16 @@ debugch: true
 input:
   - type: http
     method: GET
-    url: "http://127.0.0.1/"
+    url: "http://127.0.0.1:8090/"
     interval: 3
+    codec:
+      type: "default"
 	`)))
 	require.NoError(err)
 	require.NoError(conf.Start(ctx))
 
 	time.Sleep(500 * time.Millisecond)
 	if event, err := conf.TestGetOutputEvent(100 * time.Millisecond); assert.NoError(err) {
-		t.Log(event)
+		assert.Equal("foo", event.Message)
 	}
 }

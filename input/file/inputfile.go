@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Sirupsen/logrus"
-	"github.com/go-fsnotify/fsnotify"
+	"github.com/fsnotify/fsnotify"
 	"github.com/tsaikd/KDGoLib/errutil"
 	"github.com/tsaikd/KDGoLib/futil"
 	"github.com/tsaikd/gogstash/config"
+	"github.com/tsaikd/gogstash/config/goglog"
 	"github.com/tsaikd/gogstash/config/logevent"
 	"golang.org/x/sync/errgroup"
 )
@@ -69,12 +69,17 @@ func InitHandler(ctx context.Context, raw *config.ConfigRaw) (config.TypeInputCo
 		return nil, err
 	}
 
+	conf.Codec, err = config.GetCodec(ctx, *raw)
+	if err != nil {
+		return nil, err
+	}
+
 	return &conf, nil
 }
 
 // Start wraps the actual function starting the plugin
 func (t *InputConfig) Start(ctx context.Context, msgChan chan<- logevent.LogEvent) (err error) {
-	logger := config.Logger
+	logger := goglog.Logger
 
 	if err = t.LoadSinceDBInfos(); err != nil {
 		return
@@ -111,7 +116,7 @@ func (t *InputConfig) Start(ctx context.Context, msgChan chan<- logevent.LogEven
 		func(fpath string) {
 			readEventChan := make(chan fsnotify.Event, 10)
 			eg.Go(func() error {
-				return t.fileReadLoop(ctx, readEventChan, fpath, logger, msgChan)
+				return t.fileReadLoop(ctx, readEventChan, fpath, msgChan)
 			})
 			eg.Go(func() error {
 				return t.fileWatchLoop(ctx, readEventChan, fpath, fsnotify.Create|fsnotify.Write)
@@ -126,7 +131,6 @@ func (t *InputConfig) fileReadLoop(
 	ctx context.Context,
 	readEventChan chan fsnotify.Event,
 	fpath string,
-	logger *logrus.Logger,
 	msgChan chan<- logevent.LogEvent,
 ) (err error) {
 	var (
@@ -140,6 +144,7 @@ func (t *InputConfig) fileReadLoop(
 		size      int
 
 		buffer = &bytes.Buffer{}
+		logger = goglog.Logger
 	)
 
 	if fpath, err = evalSymlinks(ctx, fpath); err != nil {
@@ -217,22 +222,25 @@ func (t *InputConfig) fileReadLoop(
 			}
 		}
 
-		event := logevent.LogEvent{
-			Timestamp: time.Now(),
-			Message:   line,
-			Extra: map[string]interface{}{
+		_, err := t.Codec.Decode(ctx, []byte(line),
+			map[string]interface{}{
 				"host":   t.hostname,
 				"path":   fpath,
 				"offset": since.Offset,
 			},
+			msgChan)
+
+		if err == nil {
+			since.Offset += int64(size)
+
+			//loggfer.Debugf("%q %v", event.Message, event)
+			//msgChan <- event
+
+			//self.SaveSinceDBInfos()
+			t.CheckSaveSinceDBInfos()
+		} else {
+			logger.Errorf("Failed to decode %v using codec %v", line, t.Codec)
 		}
-
-		since.Offset += int64(size)
-
-		logger.Debugf("%q %v", event.Message, event)
-		msgChan <- event
-		//self.SaveSinceDBInfos()
-		t.CheckSaveSinceDBInfos()
 	}
 }
 

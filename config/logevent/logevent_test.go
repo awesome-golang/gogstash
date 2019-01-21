@@ -1,11 +1,16 @@
 package logevent
 
 import (
+	"encoding/json"
 	"os"
 	"testing"
 	"time"
 
+	jsoniter "github.com/json-iterator/go"
+	"github.com/tsaikd/KDGoLib/jsonex"
+
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_FormatWithEnv(t *testing.T) {
@@ -91,12 +96,151 @@ func Test_Format(t *testing.T) {
 
 	out = logevent.Format("%{null}")
 	assert.Equal("%{null}", out)
+}
+
+func Test_Tags(t *testing.T) {
+	assert := assert.New(t)
+	assert.NotNil(assert)
+
+	logevent := LogEvent{
+		Extra: map[string]interface{}{
+			"int": 123,
+		},
+	}
+
+	logevent.ParseTags(interface{}([]interface{}{"foo", "bar"}))
+	assert.Len(logevent.Tags, 2)
+	assert.Equal([]string{"foo", "bar"}, logevent.Tags)
 
 	logevent.AddTag("tag1", "tag2", "tag3")
-	assert.Len(logevent.Tags, 3)
+	assert.Len(logevent.Tags, 5)
 	assert.Contains(logevent.Tags, "tag1")
 
 	logevent.AddTag("tag1", "tag%{int}")
-	assert.Len(logevent.Tags, 4)
+	assert.Len(logevent.Tags, 6)
 	assert.Contains(logevent.Tags, "tag123")
+}
+
+func Test_GetValue(t *testing.T) {
+	assert := assert.New(t)
+	assert.NotNil(assert)
+
+	eventTime := time.Date(2017, time.April, 5, 17, 41, 12, 345, time.UTC)
+	event := LogEvent{
+		Timestamp: eventTime,
+		Message:   "Test Message",
+		Extra: map[string]interface{}{
+			"nginx": map[string]interface{}{
+				"access": map[string]interface{}{
+					"response_code": 200,
+				},
+			},
+		},
+	}
+
+	responseCode, ok := event.GetValue("nginx.access.response_code")
+	assert.True(ok)
+	assert.Equal(200, responseCode)
+}
+
+func Test_SetValue(t *testing.T) {
+	assert := assert.New(t)
+	assert.NotNil(assert)
+	require := require.New(t)
+	require.NotNil(require)
+
+	eventTime := time.Date(2017, time.April, 5, 17, 41, 12, 345, time.UTC)
+	event := LogEvent{
+		Timestamp: eventTime,
+		Message:   "Test Message",
+	}
+
+	assert.True(event.SetValue("nginx.access.remote_ip", "1.1.1.1"))
+
+	require.Equal(LogEvent{
+		Timestamp: eventTime,
+		Message:   "Test Message",
+		Extra: map[string]interface{}{
+			"nginx": map[string]interface{}{
+				"access": map[string]interface{}{
+					"remote_ip": "1.1.1.1",
+				},
+			},
+		},
+	}, event)
+}
+
+func Test_MarshalJSON(t *testing.T) {
+	assert := assert.New(t)
+	assert.NotNil(assert)
+
+	eventTime := time.Date(2017, time.April, 5, 17, 41, 12, 345, time.UTC)
+	event := LogEvent{
+		Timestamp: eventTime,
+		Message:   "Test Message",
+	}
+
+	d, err := json.Marshal(event)
+	assert.NoError(err)
+	assert.NotContains(string(d), `"tags":[`)
+
+	event.AddTag("test_tag")
+
+	d, err = json.Marshal(event)
+	assert.NoError(err)
+	assert.Contains(string(d), `"tags":["test_tag"]`)
+
+	d, err = event.MarshalIndent()
+	assert.NoError(err)
+	assert.Contains(string(d), "\n\t\"")
+}
+
+var benchEvent = LogEvent{
+	Timestamp: time.Now(),
+	Message:   "Test Message",
+	Extra: map[string]interface{}{
+		"int":    123,
+		"float":  1.23,
+		"string": "Test String",
+		"time":   time.Now(),
+		"child": map[string]interface{}{
+			"childA": "foo",
+		},
+	},
+}
+
+func Benchmark_Marshal_JSONEx(b *testing.B) {
+	jsonMap := benchEvent.getJSONMap()
+	d, err := jsonex.Marshal(jsonMap)
+	if err != nil {
+		b.FailNow()
+	}
+	b.SetBytes(int64(len(d)))
+	for n := 0; n < b.N; n++ {
+		jsonex.Marshal(jsonMap)
+	}
+}
+
+func Benchmark_Marshal_JSONIter(b *testing.B) {
+	jsonMap := benchEvent.getJSONMap()
+	d, err := jsoniter.Marshal(jsonMap)
+	if err != nil {
+		b.FailNow()
+	}
+	b.SetBytes(int64(len(d)))
+	for n := 0; n < b.N; n++ {
+		jsoniter.Marshal(jsonMap)
+	}
+}
+
+func Benchmark_Marshal_StdJSON(b *testing.B) {
+	jsonMap := benchEvent.getJSONMap()
+	d, err := json.Marshal(jsonMap)
+	if err != nil {
+		b.FailNow()
+	}
+	b.SetBytes(int64(len(d)))
+	for n := 0; n < b.N; n++ {
+		json.Marshal(jsonMap)
+	}
 }

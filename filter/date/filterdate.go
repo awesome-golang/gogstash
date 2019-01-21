@@ -4,7 +4,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/tengattack/jodatime"
 	"github.com/tsaikd/gogstash/config"
+	"github.com/tsaikd/gogstash/config/goglog"
 	"github.com/tsaikd/gogstash/config/logevent"
 )
 
@@ -18,8 +20,11 @@ const ErrorTag = "gogstash_filter_date_error"
 type FilterConfig struct {
 	config.FilterConfig
 
-	Format string `json:"format"` // date parse format
-	Source string `json:"source"` // source message field name
+	Format []string `json:"format"` // date parse format
+	Source string   `json:"source"` // source message field name
+	Joda   bool     `json:"joda"`   // whether using joda time format
+
+	timeParser func(layout, value string) (time.Time, error)
 }
 
 // DefaultFilterConfig returns an FilterConfig struct with default values
@@ -30,7 +35,7 @@ func DefaultFilterConfig() FilterConfig {
 				Type: ModuleName,
 			},
 		},
-		Format: time.RFC3339Nano,
+		Format: []string{time.RFC3339Nano},
 		Source: "message",
 	}
 }
@@ -42,19 +47,31 @@ func InitHandler(ctx context.Context, raw *config.ConfigRaw) (config.TypeFilterC
 		return nil, err
 	}
 
+	if conf.Joda {
+		conf.timeParser = jodatime.Parse
+	} else {
+		conf.timeParser = time.Parse
+	}
+
 	return &conf, nil
 }
 
 // Event the main filter event
 func (f *FilterConfig) Event(ctx context.Context, event logevent.LogEvent) logevent.LogEvent {
-	if event.Extra == nil {
-		event.Extra = map[string]interface{}{}
+	var (
+		timestamp time.Time
+		err       error
+	)
+	for _, thisFormat := range f.Format {
+		timestamp, err = f.timeParser(thisFormat, event.GetString(f.Source))
+		if err == nil {
+			break
+		}
 	}
 
-	timestamp, err := time.Parse(f.Format, event.GetString(f.Source))
 	if err != nil {
 		event.AddTag(ErrorTag)
-		config.Logger.Error(err)
+		goglog.Logger.Error(err)
 		return event
 	}
 

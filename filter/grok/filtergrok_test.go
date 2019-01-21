@@ -8,21 +8,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tsaikd/gogstash/config"
+	"github.com/tsaikd/gogstash/config/goglog"
 	"github.com/tsaikd/gogstash/config/logevent"
 )
 
 var (
-	logger   = config.Logger
 	fileName = "patterns"
 	fileData = []byte(`NGINXTEST %{IP:addr} - (?:%{USERNAME:auth}|-) \[%{HTTPDATE:time}\] "(?:%{WORD:method} %{URIPATHPARAM:request}(?: HTTP/%{NUMBER:httpversion})?|-)" %{NUMBER:status} (?:%{NUMBER:body_bytes}|-) "(?:%{URI:referrer}|-)" (?:%{QS:agent}|-) %{NUMBER:request_time} (?:%{HOSTPORT:upstream_addr}|-)` + "\n")
 )
 
 func init() {
-	logger.Level = logrus.DebugLevel
+	goglog.Logger.SetLevel(logrus.DebugLevel)
 	config.RegistFilterHandler(ModuleName, InitHandler)
 
 	err := ioutil.WriteFile(fileName, fileData, 0644)
@@ -43,7 +43,7 @@ debugch: true
 filter:
   - type: grok
     source: message
-    match: "%{NGINXTEST}"
+    match: ["%{NGINXTEST}"]
     patterns_path: "patterns"
 	`)))
 	require.NoError(err)
@@ -89,6 +89,20 @@ filter:
 
 	if event, err := conf.TestGetOutputEvent(300 * time.Millisecond); assert.NoError(err) {
 		require.Equal(expectedEvent, event)
+	}
+
+	conf.TestInputEvent(logevent.LogEvent{
+		Timestamp: timestamp,
+		Message:   `8.8.8.8 - - [18/Jul/2017:16:10:16 +0300] "GET /index.html HTTP/1.1" 200 756 "https://google.com/" "Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/59.0.3071.115 Safari/537.36"`,
+		Extra: map[string]interface{}{
+			"host":   hostname,
+			"path":   "/test/file/path",
+			"offset": 0,
+		},
+	})
+
+	if event, err := conf.TestGetOutputEvent(300 * time.Millisecond); assert.NoError(err) {
+		require.Contains(event.Tags, ErrorTag)
 	}
 
 	err = os.Remove(fileName)

@@ -8,19 +8,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tsaikd/gogstash/config"
+	"github.com/tsaikd/gogstash/config/goglog"
 	"github.com/tsaikd/gogstash/config/logevent"
 )
 
-var (
-	logger = config.Logger
-)
-
 func init() {
-	logger.Level = logrus.DebugLevel
+	goglog.Logger.SetLevel(logrus.DebugLevel)
 	config.RegistOutputHandler(ModuleName, InitHandler)
 }
 
@@ -49,16 +46,17 @@ output:
 	})
 	value, err := getMetric()
 	require.NoError(err)
-	require.Equal("processed_messages_total 1", value)
+	require.Equal("processed_messages_total 1.0", value)
 
 	// sending second event
 	conf.TestInputEvent(logevent.LogEvent{
 		Timestamp: time.Now(),
 		Message:   "output prometheus test message",
 	})
+	time.Sleep(500 * time.Millisecond)
 	value, err = getMetric()
 	require.NoError(err)
-	require.Equal("processed_messages_total 2", value)
+	require.Equal("processed_messages_total 2.0", value)
 }
 
 func getMetric() (string, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/tsaikd/KDGoLib/errutil"
+	"github.com/tsaikd/gogstash/config/goglog"
 	"github.com/tsaikd/gogstash/config/logevent"
 	"golang.org/x/sync/errgroup"
 )
@@ -37,21 +38,26 @@ func RegistOutputHandler(name string, handler OutputHandler) {
 	mapOutputHandler[name] = handler
 }
 
-func (t *Config) getOutputs() (outputs []TypeOutputConfig, err error) {
+// GetOutputs get outputs from config
+func GetOutputs(ctx context.Context, outputRaw []ConfigRaw) (outputs []TypeOutputConfig, err error) {
 	var output TypeOutputConfig
-	for _, raw := range t.OutputRaw {
+	for _, raw := range outputRaw {
 		handler, ok := mapOutputHandler[raw["type"].(string)]
 		if !ok {
 			return outputs, ErrorUnknownOutputType1.New(nil, raw["type"])
 		}
 
-		if output, err = handler(t.ctx, &raw); err != nil {
+		if output, err = handler(ctx, &raw); err != nil {
 			return outputs, ErrorInitOutputFailed1.New(err, raw)
 		}
 
 		outputs = append(outputs, output)
 	}
 	return
+}
+
+func (t *Config) getOutputs() (outputs []TypeOutputConfig, err error) {
+	return GetOutputs(t.ctx, t.OutputRaw)
 }
 
 func (t *Config) startOutputs() (err error) {
@@ -64,14 +70,16 @@ func (t *Config) startOutputs() (err error) {
 		for {
 			select {
 			case <-t.ctx.Done():
-				return nil
+				if len(t.chFilterOut) < 1 {
+					return nil
+				}
 			case event := <-t.chFilterOut:
 				eg, ctx := errgroup.WithContext(t.ctx)
 				for _, output := range outputs {
 					func(output TypeOutputConfig) {
 						eg.Go(func() error {
 							if err2 := output.Output(ctx, event); err2 != nil {
-								Logger.Errorf("output module %q failed: %v\n", output.GetType(), err)
+								goglog.Logger.Errorf("output module %q failed: %v\n", output.GetType(), err2)
 							}
 							return nil
 						})
